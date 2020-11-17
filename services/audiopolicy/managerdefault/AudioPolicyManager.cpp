@@ -5309,7 +5309,12 @@ sp<DeviceDescriptor> AudioPolicyManager::getNewInputDevice(
     // If we are not in call and no client is active on this input, this methods returns
     // a null sp<>, causing the patch on the input stream to be released.
     audio_attributes_t attributes = inputDesc->getHighestPriorityAttributes();
-    if (attributes.source == AUDIO_SOURCE_DEFAULT && isInCall()) {
+
+    // Check for source AUDIO_SOURCE_VOICE_UPLINK when in call.
+    // Device switch during in call record use case returns built-in mic
+    // as new device which is not supported on primary input.
+    // Avoid this by retrieving device based on highest priority source.
+    if ((attributes.source == AUDIO_SOURCE_DEFAULT || attributes.source != AUDIO_SOURCE_VOICE_UPLINK) && isInCall()) {
         attributes.source = AUDIO_SOURCE_VOICE_COMMUNICATION;
     }
     if (attributes.source != AUDIO_SOURCE_DEFAULT) {
@@ -5704,6 +5709,11 @@ sp<IOProfile> AudioPolicyManager::getInputProfile(const sp<DeviceDescriptor> &de
         for (const auto& profile : hwModule->getInputProfiles()) {
             // profile->log();
             //updatedFormat = format;
+            // Choose the input profile based on this priority:
+            // 1. exact match with both channel mask and format
+            // 2. exact match with channel mask and best match with format
+            // 3. exact match with format and best match with channel mask
+            // 4. best match with both channel mask and format
             if (profile->isCompatibleProfile(DeviceVector(device), samplingRate,
                                              &samplingRate  /*updatedSamplingRate*/,
                                              format,
@@ -5712,7 +5722,10 @@ sp<IOProfile> AudioPolicyManager::getInputProfile(const sp<DeviceDescriptor> &de
                                              &channelMask   /*updatedChannelMask*/,
                                              // FIXME ugly cast
                                              (audio_output_flags_t) flags,
-                                             true /*exactMatchRequiredForInputFlags*/)) {
+                                             true /*exactMatchRequiredForInputFlags*/,
+                                             true,
+                                             true)) {
+
                 return profile;
             }
             if (firstInexact == nullptr && profile->isCompatibleProfile(DeviceVector(device),
@@ -5724,12 +5737,42 @@ sp<IOProfile> AudioPolicyManager::getInputProfile(const sp<DeviceDescriptor> &de
                                              &updatedChannelMask,
                                              // FIXME ugly cast
                                              (audio_output_flags_t) flags,
-                                             false /*exactMatchRequiredForInputFlags*/)) {
+                                             false /*exactMatchRequiredForInputFlags*/,
+                                             false,
+                                             true)) {
                 firstInexact = profile;
             }
-
+            if (firstInexact == nullptr && profile->isCompatibleProfile(DeviceVector(device),
+                                             samplingRate,
+                                             &updatedSamplingRate,
+                                             format,
+                                             &updatedFormat,
+                                             channelMask,
+                                             &updatedChannelMask,
+                                             // FIXME ugly cast
+                                             (audio_output_flags_t) flags,
+                                             false /*exactMatchRequiredForInputFlags*/,
+                                             true,
+                                             false)) {
+                firstInexact = profile;
+            }
+            if (firstInexact == nullptr && profile->isCompatibleProfile(DeviceVector(device),
+                                             samplingRate,
+                                             &updatedSamplingRate,
+                                             format,
+                                             &updatedFormat,
+                                             channelMask,
+                                             &updatedChannelMask,
+                                             // FIXME ugly cast
+                                             (audio_output_flags_t) flags,
+                                             false /*exactMatchRequiredForInputFlags*/,
+                                             false,
+                                             false)) {
+                firstInexact = profile;
+            }
         }
     }
+
     if (firstInexact != nullptr) {
         samplingRate = updatedSamplingRate;
         format = updatedFormat;
